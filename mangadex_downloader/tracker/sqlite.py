@@ -102,7 +102,7 @@ class DownloadTrackerSQLite:
         if config.no_track:
             return False
 
-        # https://github.com/mansuf/mangadex-downloader/issues/52
+        # upstream issue mansuf/mangadex-downloader#52
         with self._lock:
             try:
                 self.db.execute(
@@ -215,11 +215,13 @@ class DownloadTrackerSQLite:
 
         with self._lock:
             cur = self.db.cursor()
+            # "IS" instead of "=" because volume can be NULL (No Volume)
             cur.execute(
-                f"SELECT name FROM '{self._fi_name}' WHERE volume = ?", (volume,)
+                f"SELECT name FROM '{self._fi_name}' WHERE volume IS ?", (volume,)
             )
 
             fi_name = cur.fetchone()
+            cur.close()
             if fi_name is None:
                 return None
 
@@ -253,6 +255,11 @@ class DownloadTrackerSQLite:
             cur = self.db.cursor()
 
             cur.execute(f"DELETE FROM '{self._fi_name}' WHERE name = ?", (name,))
+
+            # "ON DELETE CASCADE" doesn't work unless "PRAGMA foreign_keys" is enabled,
+            # delete the images and chapters info manually
+            cur.execute(f"DELETE FROM '{self._img_name}' WHERE fi_name = ?", (name,))
+            cur.execute(f"DELETE FROM '{self._ch_name}' WHERE fi_name = ?", (name,))
 
             self.db.commit()
             cur.close()

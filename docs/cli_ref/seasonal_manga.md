@@ -18,9 +18,9 @@ mangadex-dl "seasonal:list"
 
 ```{note}
 Current seasonal manga is retrieved from 
-https://github.com/mansuf/mangadex-downloader/blob/main/seasonal_manga_now.txt. 
+https://github.com/RickSteadX/mangadex-downloader/blob/main/seasonal_manga_now.txt. 
 If you think this is out of update, 
-please open a issue [here](https://github.com/mansuf/mangadex-downloader/issues)
+please open a issue [here](https://github.com/RickSteadX/mangadex-downloader/issues)
 ```
 
 ## Example usage

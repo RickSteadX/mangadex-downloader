@@ -35,9 +35,8 @@ body:
       label: Installation origin
       description: Where did you install mangadex-downloader ?
       options:
-        - "PyPI (Python Package Index)"
-        - Github releases
-        - "git clone && python setup.py install"
+        - "pip install git+https://github.com/RickSteadX/mangadex-downloader.git"
+        - "git clone && pip install ."
         - Other
     validations: 
       required: true

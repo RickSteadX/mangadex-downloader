@@ -308,7 +308,7 @@ class Chapter:
     def groups_name(self):
         if not self.groups and self.user:
             return f"User - {self.user.name}"
-        elif not self.user:
+        elif not self.groups:
             return "User is not specified"
 
         groups = self.groups.copy()
@@ -548,7 +548,12 @@ class IteratorChapter:
         return True
 
     def _check_duplicate(self, chap):
-        name = f"{chap.volume}:{chap.chapter}"
+        if chap.chapter is None:
+            # Oneshots have no chapter number,
+            # use the title so different oneshots are not marked as duplicates
+            name = f"{chap.volume}:oneshot:{chap.title}"
+        else:
+            name = f"{chap.volume}:{chap.chapter}"
 
         try:
             self.duplicates[name]
@@ -627,7 +632,7 @@ class IteratorChapter:
 
                 elif isinstance(group, User):
                     group_type = "user"
-                    group_names = chap.user.name
+                    group_names = chap.user.name if chap.user else "Unknown"
 
                     if chap.user and group.id == chap.user.id:
                         group_check = True
@@ -686,8 +691,9 @@ class IteratorChapter:
         def sort_chapter(c):
             try:
                 return convert_int_or_float(c.chapter)
-            except ValueError:
-                return float("nan")
+            except (ValueError, TypeError):
+                # Chapters with no number (oneshot) are placed at the end
+                return float("inf")
 
         if config.sort_by == "chapter":
             self.chapters = sorted(self.chapters, key=sort_chapter)

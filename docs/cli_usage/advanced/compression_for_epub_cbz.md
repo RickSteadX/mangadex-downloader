@@ -17,5 +17,5 @@ set MANGADEXDL_ZIP_COMPRESSION_LEVEL=9
 
 For more information, see:
 
-- [MANGADEXDL_ZIP_COMPRESSION_TYPE](https://mangadex-dl.mansuf.link/en/stable/cli_ref/env_vars.html#cmdoption-arg-MANGADEXDL_ZIP_COMPRESSION_TYPE)
-- [MANGADEXDL_ZIP_COMPRESSION_LEVEL](https://mangadex-dl.mansuf.link/en/stable/cli_ref/env_vars.html#cmdoption-arg-MANGADEXDL_ZIP_COMPRESSION_LEVEL)
+- [MANGADEXDL_ZIP_COMPRESSION_TYPE](../../cli_ref/env_vars.md#MANGADEXDL_ZIP_COMPRESSION_TYPE)
+- [MANGADEXDL_ZIP_COMPRESSION_LEVEL](../../cli_ref/env_vars.md#MANGADEXDL_ZIP_COMPRESSION_LEVEL)

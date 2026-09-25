@@ -50,5 +50,5 @@ cli_ref/index
 
 migration_v2_v3
 changelog
-Github repository <https://github.com/mansuf/mangadex-downloader>
+Github repository <https://github.com/RickSteadX/mangadex-downloader>
 ```

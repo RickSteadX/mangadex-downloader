@@ -29,7 +29,7 @@ import time
 import logging
 import sys
 import threading
-from . import __version__, json_op
+from . import __version__, __repository__, __url_repository__, json_op
 from .errors import (
     AlreadyLoggedIn,
     HTTPException,
@@ -89,7 +89,8 @@ class ModifiedSession(requests.Session):
         self._timeout = time
 
     def send(self, r, **kwargs):
-        kwargs.update({"timeout": self._timeout})
+        if self._timeout is not None:
+            kwargs["timeout"] = self._timeout
         return super().send(r, **kwargs)
 
 
@@ -117,7 +118,7 @@ class requestsMangaDexSession(ModifiedSession):
         self.config = config
         user_agent = (
             f"mangadex-downloader {__version__} "
-            "(https://github.com/mansuf/mangadex-downloader) "
+            f"({__url_repository__}/{__repository__}) "
         )
         user_agent += "Python/{0[0]}.{0[1]} ".format(sys.version_info)
         user_agent += "requests/{0}".format(requests.__version__)
@@ -203,7 +204,7 @@ class requestsMangaDexSession(ModifiedSession):
                 pass
 
         headers_kwarg = kwargs.get("headers")
-        if headers_kwarg:
+        if headers_kwarg is not None:
             headers_kwarg.update(headers)
         else:
             kwargs.setdefault("headers", headers)
@@ -245,7 +246,7 @@ class requestsMangaDexSession(ModifiedSession):
                 # the app is sleeping for 120 seconds if happened like this,
                 delay = DEFAULT_RATE_LIMITED_TIMEOUT
 
-            # Fix https://github.com/mansuf/mangadex-downloader/issues/147
+            # Fix upstream issue mansuf/mangadex-downloader#147
             # Negative value on the rate limited header
             delay = abs(delay)
 
@@ -270,6 +271,9 @@ class requestsMangaDexSession(ModifiedSession):
                 f"reason: Server throwing error code {resp.status_code}. "
                 f"Trying... (attempt: {attempt})"
             )
+            # Keep the failed response, so the caller can raise HTTPException
+            # when all attempts are exhausted
+            self._last_error_resp = resp
             return None
 
         return resp
@@ -286,13 +290,24 @@ class requestsMangaDexSession(ModifiedSession):
         else:
             iterator = itertools.count()
 
+        self._last_error_resp = None
         for _ in iterator:
             resp = self._request(attempt, method, url, *args, **kwargs)
 
+            if resp is not None:
+                # --delay-requests
+                if self.delay:
+                    time.sleep(self.delay)
+
+                self.last_request_id = resp.headers.get("X-Request-ID", None)
+                return resp
+
+            # Don't sleep after the final attempt
+            if isinstance(retries, int) and attempt >= retries:
+                break
+
             if self.delay:
                 delay = self.delay
-            elif resp is not None:
-                delay = None
             elif attempt >= 5:
                 # We don't wanna go further
                 delay = 2.5
@@ -302,16 +317,13 @@ class requestsMangaDexSession(ModifiedSession):
             if delay:
                 time.sleep(delay)
 
-            if resp is not None:
-                self.last_request_id = resp.headers.get("X-Request-ID", None)
-                return resp
-
             attempt += 1
             continue
 
+        resp = self._last_error_resp
         request_id = (
             resp.headers.get("X-Request-ID", self.last_request_id)
-            if resp
+            if resp is not None
             else self.last_request_id
         )
         pbm.logger.debug(

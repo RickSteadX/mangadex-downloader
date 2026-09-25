@@ -157,7 +157,7 @@ def delete_file(file):
             time.sleep(attempt * 0.5)  # Possible value 0.0 (0 * 0.5) lmao
             continue
         else:
-            break
+            return
 
     # If 5 attempts is failed to delete file (ex: PermissionError, or etc.)
     # raise error
@@ -405,7 +405,8 @@ def convert_start_end_from_negative(start_num, end_num, data):
     for num in data:
         try:
             a = convert_int_or_float(num)
-        except ValueError:
+        except (ValueError, TypeError):
+            # Chapter number can be `None` (oneshot)
             continue
         else:
             filtered_data.append(a)

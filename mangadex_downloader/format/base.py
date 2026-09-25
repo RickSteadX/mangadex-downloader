@@ -31,8 +31,8 @@ from .utils import (
     QueueWorkerReadMarker,
 )
 from .placeholders import VolumePlaceholder, SingleChaptersPlaceholder
-from ..downloader import ChapterPageDownloader
-from ..utils import QueueWorker, create_directory, delete_file
+from ..downloader import ChapterPageDownloader, FileDownloader
+from ..utils import QueueWorker, create_directory, delete_file, get_cover_art_url
 from ..progress_bar import progress_bar_manager as pbm
 from ..path.op import get_filename
 
@@ -74,6 +74,10 @@ class BaseFormat:
 
         self.worker = None
 
+        # Cached volume covers for chapter formats (--use-volume-cover),
+        # so the cover is looked up once per volume instead of once per chapter
+        self._volume_covers = {}
+
         if config.progress_bar_layout == "stacked":
             pbm.stacked = True
 
@@ -88,10 +92,47 @@ class BaseFormat:
             pbm.close_all()
             pbm.stacked = False
 
-    def get_images(self, chap_class, images, path, count):
-        from ..config import config
+    def _use_volume_cover_in_chapter_fmt(self):
+        save_as = self.config.save_as
+        return (
+            self.config.use_volume_cover
+            and "-volume" not in save_as
+            and "-single" not in save_as
+        )
+
+    def _download_volume_cover_for_chapter(self, volume, path, count):
+        """Download volume cover for chapter formats (cbz, pdf, raw, etc)
+
+        Return path of downloaded volume cover, or ``None`` if manga doesn't have cover
+        """
         from .utils import get_volume_cover
 
+        try:
+            cover = self._volume_covers[volume]
+        except KeyError:
+            cover = get_volume_cover(
+                self.manga, volume, path=None, replace=self.replace, download=False
+            )
+            self._volume_covers[volume] = cover
+
+        if cover is None:
+            return None
+
+        pbm.logger.info(f'Getting volume cover for "Volume {volume}"')
+        ext = os.path.splitext(cover.file)[1] or ".jpg"
+        vol_cover_path = path / f"{count.get()}{ext}"
+        url = get_cover_art_url(self.manga.id, cover, "original")
+
+        fd = FileDownloader(url, vol_cover_path, replace=self.replace)
+        fd.download()
+        fd.cleanup()
+
+        if not vol_cover_path.exists():
+            return None
+
+        return vol_cover_path
+
+    def get_images(self, chap_class, images, path, count):
         imgs = []
         chap = chap_class.chapter
         chap_name = chap_class.get_name()
@@ -108,27 +149,28 @@ class BaseFormat:
         pbm.set_pages_total(total)
         pages_pb = pbm.get_pages_pb()
 
-        # https://github.com/mansuf/mangadex-downloader/issues/139
+        # upstream issue mansuf/mangadex-downloader#139
         # Option to add volume cover for chapters format only
-        if config.use_volume_cover and (
-            "-volume" not in config.save_as and "-single" not in config.save_as
-        ):
-            pbm.set_pages_total(total + 1)
+        if self._use_volume_cover_in_chapter_fmt():
+            # Total must be increased before getting the file name,
+            # because it's affecting the leading zeros
             count.total = count.total + 1
-
-            vol_cover_path = path / f"{count.get()}.png"
-
-            get_volume_cover(
-                self.manga,
-                chap_class.volume,
-                path=vol_cover_path,
-                replace=self.replace,
-                download=True,
+            vol_cover_path = self._download_volume_cover_for_chapter(
+                chap_class.volume, path, count
             )
 
-            count.increase()
-            pages_pb.update(1)
-            imgs.append(vol_cover_path)
+            if vol_cover_path is None:
+                count.total = count.total - 1
+            else:
+                pbm.set_pages_total(total + 1)
+                count.increase()
+                pages_pb.update(1)
+                imgs.append(vol_cover_path)
+
+        # State before downloading chapter images,
+        # used to rollback when one of MangaDex network is failing
+        initial_count = count.get_without_zeros()
+        initial_imgs = len(imgs)
 
         while True:
             error = False
@@ -190,7 +232,13 @@ class BaseFormat:
                     )
                     error = True
                     images.fetch()
+
+                    # Images will be re-downloaded from the first page
+                    count.reset()
+                    count.increase(int(initial_count))
+                    del imgs[initial_imgs:]
                     pages_pb.reset()
+                    pages_pb.update(initial_imgs)
                     break
                 else:
                     imgs.append(img_path)
@@ -229,7 +277,7 @@ class BaseFormat:
         # Enable log cache
         kwargs_iter = self.kwargs_iter.copy()
         kwargs_iter["log_cache"] = True
-        for chap_class, chap_images in manga.chapters.iter(**self.kwargs_iter):
+        for chap_class, chap_images in manga.chapters.iter(**kwargs_iter):
             total += chap_class.pages
 
             item = [chap_class, chap_images]
@@ -329,7 +377,7 @@ class BaseFormat:
             fi_chapters = []
             fi_completed = False
         else:
-            fi_chapters = file_info.chapters
+            fi_chapters = file_info.chapters or []
             fi_completed = file_info.completed
 
         # Check for new chapters in volume
@@ -424,7 +472,7 @@ class BaseConvertedFormat(BaseFormat):
         if chapters:
             chaps_data = [(ch.name, ch.id, name) for ch, _ in chapters]
             self.manga.tracker.add_chapters_info(chaps_data)
-            self.mark_read_chapter(chapters)
+            self.mark_read_chapter(*chapters)
 
         self.manga.tracker.toggle_complete(name, True)
 
@@ -688,6 +736,7 @@ class ConvertedVolumesFormat(BaseConvertedFormat):
 
                     # Store file_info tracker for existing volume
                     self.add_fi(filename, None, file_path, chapters, volume)
+                    volumes_pb.update(1)
                     continue
 
             # Create volume folder
@@ -953,16 +1002,25 @@ class ConvertedSingleFormat(BaseConvertedFormat):
             self.cleanup()
             return
 
-        file_info = tracker.get_all_files_info()
         placeholder_obj = self.create_placeholder_obj_for_single_fmt(cache)
         filename = get_filename(
             self.manga, placeholder_obj, self.file_ext, format="single"
         )
         file_info = tracker.get(filename)
+
+        # The tracker is not empty, but this file is not downloaded yet
+        # (ex: the filename is changed)
+        if file_info is None:
+            self.download_single(total, cache)
+
+            pbm.logger.info("Waiting for chapter read marker to finish")
+            self.cleanup()
+            return
+
         chapters = []
         # Check for new chapters in existing (downloaded) file
         for chap_class, images in cache:
-            if chap_class.id in file_info.chapters:
+            if chap_class.id in (file_info.chapters or []):
                 continue
 
             # New chapters deteceted

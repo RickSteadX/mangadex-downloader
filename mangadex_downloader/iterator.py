@@ -48,17 +48,22 @@ class BaseIterator:
         return self
 
     def __next__(self):
-        if self.queue.empty():
+        while True:
+            try:
+                return self.next()
+            except queue.Empty:
+                # Queue is empty, or all remaining items are filtered out
+                pass
+
             # Maximum number of results from MangaDex API
             if self.offset >= 10000:
                 raise StopIteration()
-            else:
-                self.fill_data()
 
-        try:
-            return self.next()
-        except queue.Empty:
-            raise StopIteration()
+            self.fill_data()
+
+            if self.queue.empty():
+                # There is no more data
+                raise StopIteration()
 
     def fill_data(self):
         raise NotImplementedError
@@ -273,23 +278,19 @@ class IteratorMangaFromList(MangaIterator):
             r = Net.mangadex.get(url, params=params)
             data = r.json()
 
-            # TODO: Refactor this
-            notexist_ids = param_ids.copy()
-            copy_data = data.copy()
-            for manga_data in copy_data["data"]:
-                manga = Manga(data=manga_data)
-                if manga.id in notexist_ids:
-                    notexist_ids.remove(manga.id)
+            mangas = [Manga(data=manga_data) for manga_data in data["data"]]
 
-            if notexist_ids:
-                for manga_id in notexist_ids:
+            # Check for manga ids that are listed but doesn't exist in MangaDex
+            found_ids = {manga.id for manga in mangas}
+            for manga_id in param_ids:
+                if manga_id not in found_ids:
                     log.warning(
                         "There is ghost (not exist) manga = "
                         f"{manga_id} in list {self.name}"
                     )
 
-            for manga_data in data["data"]:
-                self.queue.put(Manga(data=manga_data))
+            for manga in mangas:
+                self.queue.put(manga)
 
 
 class IteratorUserLibraryList(BaseIterator):
@@ -438,8 +439,8 @@ def iter_random_manga(**filters):
 
         if blacklisted:
             log.debug(
-                f"Not showing manga {manga.title!r}",
-                f"since it contain one or more blacklisted tags {tags}",
+                f"Not showing manga {manga.title!r}, "
+                f"since it contain one or more blacklisted tags {tags}"
             )
             continue
 

@@ -20,10 +20,29 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# The rest of this codes is undocumented.
-# Because there is too much to write
-# especially with _parse_ptrn() and RangeChecker
-# FIXME: give this codes a documentation
+"""Range pattern parser and checker
+
+A range pattern is a comma-separated list of chapter patterns.
+Each chapter pattern can be followed by page patterns inside square brackets,
+the page patterns are comma-separated too. Spaces are ignored.
+
+Supported patterns (for both chapters and pages):
+
+- ``5``      : Exact number (or non-number chapter like ``oneshot``, ``extra``)
+- ``!5``     : Ignore (exclude) the exact number
+- ``1-10``   : From 1 to 10 (inclusive)
+- ``5-``     : From 5 to the last one
+- ``-10``    : From the first one to 10
+
+Range patterns (``1-10``, ``5-``, ``-10``) only accept numbers
+and cannot be combined with ignore symbol (``!``).
+
+Examples::
+
+    1-10, !5            # chapter 1 to 10, except chapter 5
+    1[1-5], 2[!3], 10-  # chapter 1 page 1-5, chapter 2 without page 3,
+                        # and chapter 10 onwards
+"""
 
 import re
 
@@ -49,6 +68,14 @@ def _err_invalid_ptrn(text, err_ptrn, msg):
     raise InvalidPattern(err_msg)
 
 def _parse_ptrn(_text):
+    """Parse range pattern into list of ``(chapter_pattern, page_patterns)``
+
+    For example ``"1-5, 7[1-3, !2]"`` is parsed into::
+
+        [("1-5", []), ("7", ["1-3", "!2"])]
+
+    Raise :class:`InvalidPattern` if the pattern is malformed
+    """
     open_square_bracket = False
     close_square_bracket = False
     ptrn = ""
@@ -195,30 +222,16 @@ def _parse_ptrn(_text):
     return list_ptrn
 
 class _Checker:
-    ignored_chapters = []
-    ignored_pages = {}
+    """Base checker for a single chapter or page pattern
+
+    ``ignored_chapters`` and ``ignored_pages`` are shared between checkers
+    of the same :class:`RangeChecker` (see :meth:`RangeChecker._create_checker`)
+    """
 
     def __init__(self, ptrn):
         self.ptrn = ptrn.lower()
-
-    @classmethod
-    def ignore_chapter(cls, num):
-        if num.startswith('!'):
-            num = num[1:] # Remove "!"
-
-        cls.ignored_chapters.append(num)
-    
-    @classmethod
-    def ignore_page(cls, chap, num):
-        if num.startswith('!'):
-            num = num[1:] # Remove "!"
-
-        try:
-            pages = cls.ignored_pages[chap]
-        except KeyError:
-            cls.ignored_pages[chap] = [num]
-        else:
-            pages.append(num)
+        self.ignored_chapters = []
+        self.ignored_pages = {}
 
     def _get_keyword(self, chap):
         keyword = ""
@@ -326,6 +339,10 @@ class _Check(_Checker):
         super().__init__(ptrn)
     
     def check(self, num):
+        if num is None:
+            # Chapter without number (oneshot) is handled in check_chapter()
+            return False
+
         return num.lower() == self.ptrn
 
 re_numbers = r''
@@ -408,31 +425,45 @@ class _Pattern:
 
 class RangeChecker:
     """A class to compile range pattern and check if chapters is downloadable from range pattern
-    
+
     client should not create this, instead use :meth:`compile()`
+
+    Each chapter pattern is converted into ``(chapter_checker, page_checkers)``.
+    A chapter is downloadable if one of chapter checkers is passed,
+    and a page is downloadable if the chapter has no page patterns
+    or one of the page checkers is passed.
+    Ignored (``!``) chapters and pages are stored per :class:`RangeChecker`.
     """
     def __init__(self, ptrn):
         self.patterns = _parse_ptrn(ptrn)
         self.checkers = []
+        self.ignored_chapters = []
+        self.ignored_pages = {}
         self._parse()
 
     def _create_checker(self, num):
         ptrn = _Pattern(num)
         cls = ptrn.get_cls()
-        return ptrn, cls(num)
-    
+        checker = cls(num)
+
+        # Share ignored chapters and pages with all checkers
+        checker.ignored_chapters = self.ignored_chapters
+        checker.ignored_pages = self.ignored_pages
+
+        return ptrn, checker
+
     def _create_checker_chapter(self, num):
         ptrn, checker = self._create_checker(num)
         if ptrn.ignored:
-            _Checker.ignore_chapter(num)
-        
+            self.ignored_chapters.append(num[1:]) # Remove "!"
+
         return checker
 
     def _create_checker_page(self, chap, num):
         ptrn, checker = self._create_checker(num)
         if ptrn.ignored:
-            _Checker.ignore_page(chap, num)
-        
+            self.ignored_pages.setdefault(chap, []).append(num[1:]) # Remove "!"
+
         return checker
 
     def _parse(self):

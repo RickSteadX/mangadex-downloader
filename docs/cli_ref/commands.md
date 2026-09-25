@@ -103,7 +103,7 @@ mangadex-dl "random"
 mangadex-dl "file:/home/user/mymanga/urls.txt"
 
 # Online location
-mangadex-dl "file:https://raw.githubusercontent.com/mansuf/md-test-urls/main/urls.txt"
+mangadex-dl "file:https://example.com/urls.txt"
 ```
 
 ### Modify and show configs

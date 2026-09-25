@@ -21,7 +21,6 @@
 # SOFTWARE.
 
 import logging
-import sys
 
 from ..update import check_version
 
@@ -32,8 +31,10 @@ def check_update():
     log.debug("Checking update...")
     try:
         latest_version = check_version()
-    except Exception:
-        sys.exit(1)
+    except Exception as e:
+        # Failing to check update should not fail the download
+        log.debug(f"Failed to check update, reason: {e}")
+        return
 
     if latest_version:
         log.info(

@@ -19,8 +19,8 @@ sys.path.insert(0, os.path.abspath('..'))
 # -- Project information -----------------------------------------------------
 
 project = 'mangadex-downloader'
-copyright = '2021 - present, Rahman Yusuf'
-author = 'mansuf'
+copyright = '2021 - present, mangadex-downloader contributors'
+author = 'RickSteadX'
 
 # Find version without importing it
 regex_version = re.compile(r'[0-9]{1}.[0-9]{1,2}.[0-9]{1,3}')

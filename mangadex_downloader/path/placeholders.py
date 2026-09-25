@@ -22,7 +22,8 @@ def _get_volume(x):
 
 
 def _get_or_unknown(x):
-    if not x:
+    # Volume can be `0`, which is a valid value
+    if x is None or x == "":
         return "Unknown"
 
     return x

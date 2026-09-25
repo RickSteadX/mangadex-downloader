@@ -23,5 +23,5 @@ mangadex-dl "file:/etc/my-manga/lists-urls.txt"
 ### Batch download from web URL
 
 ```shell
-mangadex-dl "file:https://raw.githubusercontent.com/mansuf/md-test-urls/main/urls.txt"
+mangadex-dl "file:https://example.com/urls.txt"
 ```

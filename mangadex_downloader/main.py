@@ -110,10 +110,10 @@ def download(
 
         # Cover path
         cover_path = path / "cover.jpg"
-        log.info("Downloading cover manga %s" % manga.title)
+        log.info("Downloading cover manga %s" % m.title)
 
         # Determine cover art quality
-        cover_url = get_cover_art_url(manga.id, manga.cover, cover)
+        cover_url = get_cover_art_url(m.id, m.cover, cover)
 
         # Download the cover art
         if cover == "none":
@@ -122,7 +122,7 @@ def download(
             # The manga doesn't have cover
             log.info(
                 "Not downloading cover manga, "
-                f"since manga '{manga.title}' doesn't have cover"
+                f"since manga '{m.title}' doesn't have cover"
             )
         else:
             fd = FileDownloader(
@@ -137,7 +137,7 @@ def download(
             create_manga_info(path, m, replace)
 
             if config.manga_info_only:
-                return manga
+                return m
 
         m.tracker = get_tracker(save_as, path)
 
@@ -145,7 +145,7 @@ def download(
 
         fmt_cls_kwargs = {
             "path": path,
-            "manga": manga,
+            "manga": m,
             "replace": replace,
             "kwargs_iter_chapter_img": kwargs_iter_chapter_images,
         }
@@ -368,6 +368,9 @@ def download_cover_art_manga(url, replace=False):
             return manga
 
     def handle_error(err, resp):
+        if resp is None:
+            raise MangaDexException(f"Failed to download cover file, reason: {err}")
+
         if not resp.ok:
             filename = result.group("filename")
             raise MangaDexException(f"Cover file '{filename}' is not found on MangaDex")

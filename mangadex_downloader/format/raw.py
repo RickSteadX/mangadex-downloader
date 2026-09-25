@@ -39,8 +39,131 @@ from ..progress_bar import progress_bar_manager as pbm
 log = logging.getLogger(__name__)
 
 
-# TODO: PLEASE REFACTOR THIS CODE (Raw, RawVolume, RawSingle)
-class Raw(BaseFormat):
+
+class BaseRawFormat(BaseFormat):
+    """Base class for raw formats (raw, raw-volume, raw-single)
+
+    Contains shared functions to verify downloaded images and
+    write the images to download tracker
+    """
+
+    def verify_images(self, file_info, dir_path, name, new_chapters=None):
+        """Verify downloaded images in ``dir_path`` from download tracker
+
+        Return tuple of ``(action, failed_images, fi_completed)``, ``action`` is one of:
+
+        - ``"download"``: Download (or re-download) the images,
+          unverified images are already deleted
+        - ``"verified"``: All images are verified, there is nothing to download
+        - ``"ignored"``: Some images are missing or unverified,
+          but they are ignored because ``--ignore-missing-chapters`` is set
+        """
+        if file_info is None or (new_chapters and file_info.completed):
+            # Not downloaded yet, or there is new chapters
+            # (directory is re-created, all of them must be downloaded)
+            return "download", [], False
+
+        fi_completed = file_info.completed
+        failed_images = []
+        for im_info in file_info.images or []:
+            if not verify_sha256(im_info.hash, dir_path / im_info.name):
+                failed_images.append(im_info)
+
+        if not fi_completed:
+            # Download is not finished yet,
+            # images will be verified in `BaseFormat.get_images()`
+            return "download", failed_images, False
+
+        if not failed_images:
+            pbm.logger.info(f"'{name}' is verified. no need to re-download")
+            return "verified", failed_images, fi_completed
+
+        if self.config.ignore_missing_chapters:
+            pbm.logger.info(
+                f"{name!r} is missing but got ignored, "
+                "since --ignore-missing-chapters is set"
+            )
+            return "ignored", failed_images, fi_completed
+
+        pbm.logger.warning(
+            f"Found {len(failed_images)} unverified or missing images "
+            f"from {name}. Re-downloading..."
+        )
+
+        # Delete unverified images
+        for im_info in failed_images:
+            im_path = dir_path / im_info.name
+
+            pbm.logger.debug(f"Removing unverified image '{im_path.resolve()}'")
+            delete_file(im_path)
+
+        return "download", failed_images, fi_completed
+
+    def write_tracker(self, name, success_images, write_chapters=True):
+        """Write downloaded images (and chapters) to download tracker
+
+        ``success_images`` is a dict of ``{chapter: images}``
+        """
+        tracker = self.manga.tracker
+        chaps_data = []
+        imgs_data = []
+        for chap_cls, images in success_images.items():
+            chaps_data.append((chap_cls.name, chap_cls.id, name))
+
+            for im in images:
+                basename = os.path.basename(im)
+                im_hash = create_file_hash_sha256(im)
+                imgs_data.append((basename, im_hash, chap_cls.id, name))
+
+        if write_chapters:
+            tracker.add_chapters_info(chaps_data)
+
+        tracker.add_images_info(imgs_data)
+        tracker.toggle_complete(name, True)
+
+    def download_chapters_to_dir(
+        self, chapters, dir_path, count, failed_images, fi_completed
+    ):
+        """Download chapters images into a single directory (volume and single formats)
+
+        Return dict of ``{chapter: images}``
+        """
+        success_images = {}
+
+        # Chapters that have images that are failed to verify
+        # (hash is not matching)
+        chapter_failed_images = set(i.chapter_id for i in failed_images)
+
+        chapters_pb = pbm.get_chapters_pb()
+
+        for chap_class, images in chapters:
+            if chap_class.id not in chapter_failed_images and fi_completed:
+                # This chapter is verified, skip it
+                count.increase(chap_class.pages)
+                if self.config.use_chapter_cover:
+                    count.increase()
+
+                chapters_pb.update(1)
+                continue
+
+            # Insert chapter info (cover) image
+            if self.config.use_chapter_cover:
+                img_path = dir_path / (count.get() + ".png")
+                get_chapter_info(self.manga, chap_class, img_path)
+                count.increase()
+
+            images = self.get_images(chap_class, images, dir_path, count)
+            success_images[chap_class] = images
+
+            self.mark_read_chapter(chap_class)
+
+            pbm.get_pages_pb().reset()
+            chapters_pb.update(1)
+
+        return success_images
+
+
+class Raw(BaseRawFormat):
     def main(self):
         base_path = self.path
         manga = self.manga
@@ -57,7 +180,6 @@ class Raw(BaseFormat):
         pbm.set_volumes_total(len(volumes.keys()))
         # Begin downloading
         for volume, chapters in volumes.items():
-
             # This means we will only download chapters that has no volume
             if (
                 volume is not None
@@ -71,50 +193,18 @@ class Raw(BaseFormat):
             chapters_pb = pbm.get_chapters_pb()
             volumes_pb = pbm.get_volumes_pb()
 
-            for index, (chap_class, images) in enumerate(chapters, start=1):
-                failed_images = []
+            for chap_class, images in chapters:
                 dir_name = get_filename(self.manga, chap_class, "", format="chapter")
 
                 file_info = self.get_fi_chapter_fmt(dir_name, chap_class.id)
                 chapter_path = create_directory(dir_name, base_path)
-                ignored = self.config.ignore_missing_chapters
 
-                if file_info is None:
-                    fi_images = []
-                    fi_completed = False
-                else:
-                    fi_images = file_info.images
-                    fi_completed = file_info.completed
-
-                for im_info in fi_images:
-                    verified = verify_sha256(im_info.hash, chapter_path / im_info.name)
-                    if not verified:
-                        failed_images.append(im_info)
-
-                if failed_images and fi_completed and not ignored:
-                    pbm.logger.warning(
-                        f"Found {len(failed_images)} unverified or missing images "
-                        f"from {dir_name}. Re-downloading..."
-                    )
-
-                    # Delete unverified images
-                    for im_info in failed_images:
-                        im_path = chapter_path / im_info.name
-
-                        pbm.logger.debug(
-                            f"Removing unverified image '{im_path.resolve()}'"
-                        )
-                        delete_file(im_path)
-                elif not failed_images and fi_completed and (not ignored or ignored):
-                    pbm.logger.info(f"'{dir_name}' is verified. no need to re-download")
+                action, _, _ = self.verify_images(file_info, chapter_path, dir_name)
+                if action == "verified":
                     self.mark_read_chapter(chap_class)
+
+                if action != "download":
                     chapters_pb.update(1)
-                    continue
-                elif failed_images and fi_completed and ignored:
-                    pbm.logger.info(
-                        f"{dir_name!r} is missing but got ignored, "
-                        "since --ignore-missing-chapters is set"
-                    )
                     continue
 
                 count = NumberWithLeadingZeros(chap_class.pages)
@@ -122,14 +212,9 @@ class Raw(BaseFormat):
                 images = self.get_images(chap_class, images, chapter_path, count)
                 pbm.get_pages_pb().reset()
 
-                data = []
-                for im in images:
-                    basename = os.path.basename(im)
-                    im_hash = create_file_hash_sha256(im)
-                    data.append((basename, im_hash, chap_class.id, dir_name))
-
-                manga.tracker.add_images_info(data)
-                manga.tracker.toggle_complete(dir_name, True)
+                self.write_tracker(
+                    dir_name, {chap_class: images}, write_chapters=False
+                )
 
                 self.mark_read_chapter(chap_class)
                 chapters_pb.update(1)
@@ -144,12 +229,10 @@ class Raw(BaseFormat):
         self.cleanup()
 
 
-class RawVolume(BaseFormat):
+class RawVolume(BaseRawFormat):
     def main(self):
         base_path = self.path
         manga = self.manga
-        tracker = manga.tracker
-        file_info = None
 
         # Recreate DownloadTracker JSON file if --replace is present
         if self.replace:
@@ -168,8 +251,6 @@ class RawVolume(BaseFormat):
                 continue
 
             pbm.set_chapters_total(len(chapters))
-            success_images = {}
-            failed_images = []
             total = self.get_total_pages_for_volume_fmt(chapters)
 
             chapters_pb = pbm.get_chapters_pb()
@@ -186,48 +267,21 @@ class RawVolume(BaseFormat):
             volume_path = create_directory(volume_name, base_path)
             file_info = self.get_fi_volume_or_single_fmt(volume_name, volume=volume)
             new_chapters = self.get_new_chapters(file_info, chapters, volume_name)
-            ignored = self.config.ignore_missing_chapters
-
-            if file_info is None:
-                fi_images = []
-                fi_completed = False
-            else:
-                fi_images = file_info.images
-                fi_completed = file_info.completed
 
             # Only checks if ``file_info.complete`` state is True
-            if new_chapters and fi_completed:
+            if new_chapters and file_info is not None and file_info.completed:
                 # Re-create directory to prevent error
                 shutil.rmtree(volume_path, ignore_errors=True)
                 volume_path = create_directory(volume_name, base_path)
 
-            for im_info in fi_images:
-                verified = verify_sha256(im_info.hash, volume_path / im_info.name)
-                if not verified:
-                    failed_images.append(im_info)
-
-            if failed_images and fi_completed and not new_chapters and not ignored:
-                pbm.logger.warning(
-                    f"Found {len(failed_images)} unverified or missing images "
-                    f"from {volume_name}. Re-downloading..."
-                )
-
-                # Delete unverified images
-                for im_info in failed_images:
-                    im_path = volume_path / im_info.name
-
-                    pbm.logger.debug(f"Removing unverified image '{im_path.resolve()}'")
-                    delete_file(im_path)
-            elif not failed_images and fi_completed and (not ignored or ignored):
-                pbm.logger.info(f"'{volume_name}' is verified. no need to re-download")
+            action, failed_images, fi_completed = self.verify_images(
+                file_info, volume_path, volume_name, new_chapters
+            )
+            if action == "verified":
                 self.mark_read_chapter(*chapters)
-                chapters_pb.update(1)
-                continue
-            elif failed_images and fi_completed and ignored:
-                pbm.logger.info(
-                    f"{volume_name!r} is missing but got ignored, "
-                    "since --ignore-missing-chapters is set"
-                )
+
+            if action != "download":
+                volumes_pb.update(1)
                 continue
 
             # Create volume cover
@@ -238,42 +292,10 @@ class RawVolume(BaseFormat):
                 get_volume_cover(manga, volume, img_path, self.replace)
                 count.increase()
 
-            # Chapters that have images that are failed to verify
-            # (hash is not matching)
-            chapter_failed_images = set(i.chapter_id for i in failed_images)
-
-            for chap_class, images in chapters:
-                if chap_class.id not in chapter_failed_images and fi_completed:
-                    count.increase(chap_class.pages)
-                    continue
-
-                img_name = count.get() + ".png"
-                img_path = volume_path / img_name
-
-                # Insert chapter info (cover) image
-                if self.config.use_chapter_cover:
-                    get_chapter_info(self.manga, chap_class, img_path)
-                    count.increase()
-
-                images = self.get_images(chap_class, images, volume_path, count)
-                success_images[chap_class] = images
-
-                pbm.get_pages_pb().reset()
-                chapters_pb.update(1)
-
-            chaps_data = []
-            imgs_data = []
-            for chap_cls, images in success_images.items():
-                chaps_data.append((chap_cls.name, chap_cls.id, volume_name))
-
-                for im in images:
-                    basename = os.path.basename(im)
-                    im_hash = create_file_hash_sha256(im)
-                    imgs_data.append((basename, im_hash, chap_cls.id, volume_name))
-
-            tracker.add_chapters_info(chaps_data)
-            tracker.add_images_info(imgs_data)
-            tracker.toggle_complete(volume_name, True)
+            success_images = self.download_chapters_to_dir(
+                chapters, volume_path, count, failed_images, fi_completed
+            )
+            self.write_tracker(volume_name, success_images)
 
             chapters_pb.reset()
             volumes_pb.update(1)
@@ -282,14 +304,10 @@ class RawVolume(BaseFormat):
         self.cleanup()
 
 
-class RawSingle(BaseFormat):
+class RawSingle(BaseRawFormat):
     def main(self):
         base_path = self.path
         manga = self.manga
-        tracker = manga.tracker
-        file_info = None
-        success_images = {}
-        failed_images = []
 
         # Recreate DownloadTracker JSON file if --replace is present
         if self.replace:
@@ -313,55 +331,23 @@ class RawSingle(BaseFormat):
         path = create_directory(name, base_path)
         file_info = self.get_fi_volume_or_single_fmt(name)
         new_chapters = self.get_new_chapters(file_info, cache, name)
-        ignored = self.config.ignore_missing_chapters
-
-        if file_info is None:
-            fi_images = []
-            fi_completed = False
-        else:
-            fi_images = file_info.images
-            fi_completed = file_info.completed
 
         # Only checks if ``file_info.complete`` state is True
-        if new_chapters and fi_completed:
+        if new_chapters and file_info is not None and file_info.completed:
             # Re-create directory to prevent error
             shutil.rmtree(path, ignore_errors=True)
             path = create_directory(name, base_path)
 
-        for im_info in fi_images:
-            verified = verify_sha256(im_info.hash, path / im_info.name)
-            if not verified:
-                failed_images.append(im_info)
-
-        if failed_images and fi_completed and not new_chapters and not ignored:
-            pbm.logger.warning(
-                f"Found {len(failed_images)} unverified or missing images from {name}. "
-                "Re-downloading..."
-            )
-
-            # Delete unverified images
-            for im_info in failed_images:
-                im_path = path / im_info.name
-
-                pbm.logger.debug(f"Removing unverified image '{im_path.resolve()}'")
-                delete_file(im_path)
-        elif not failed_images and fi_completed and (not ignored or ignored):
-            pbm.logger.info(f"'{name}' is verified. no need to re-download")
+        action, failed_images, fi_completed = self.verify_images(
+            file_info, path, name, new_chapters
+        )
+        if action == "verified":
             self.mark_read_chapter(*cache)
 
+        if action != "download":
             pbm.logger.info("Waiting for chapter read marker to finish")
             self.cleanup()
             return
-        elif failed_images and fi_completed and ignored:
-            pbm.logger.info(
-                f"{name!r} is missing but got ignored, "
-                "since --ignore-missing-chapters is set"
-            )
-            return
-
-        # Chapters that have images that are failed to verify
-        # (hash is not matching)
-        chapter_failed_images = [i.chapter_id for i in failed_images]
 
         volumes = {}
         for chap_class, chap_images in cache:
@@ -369,6 +355,7 @@ class RawSingle(BaseFormat):
                 volumes, chap_class.volume, (chap_class, chap_images)
             )
 
+        success_images = {}
         pbm.set_volumes_total(len(volumes.keys()))
         for _, chapters in volumes.items():
             pbm.set_chapters_total(len(chapters))
@@ -376,44 +363,16 @@ class RawSingle(BaseFormat):
             chapters_pb = pbm.get_chapters_pb()
             volumes_pb = pbm.get_volumes_pb()
 
-            for chap_class, images in cache:
-                if chap_class.id not in chapter_failed_images and fi_completed:
-                    count.increase(chap_class.pages)
-                    chapters_pb.update(1)
-                    continue
-
-                # Insert chapter info (cover) image
-                img_name = count.get() + ".png"
-                img_path = path / img_name
-
-                if self.config.use_chapter_cover:
-                    get_chapter_info(self.manga, chap_class, img_path)
-                    count.increase()
-
-                images = self.get_images(chap_class, images, path, count)
-                success_images[chap_class] = images
-
-                self.mark_read_chapter(chap_class)
-
-                pbm.get_pages_pb().reset()
-                chapters_pb.update(1)
+            success_images.update(
+                self.download_chapters_to_dir(
+                    chapters, path, count, failed_images, fi_completed
+                )
+            )
 
             chapters_pb.reset()
             volumes_pb.update(1)
 
-        chaps_data = []
-        imgs_data = []
-        for chap_cls, images in success_images.items():
-            chaps_data.append((chap_cls.name, chap_cls.id, name))
-
-            for im in images:
-                basename = os.path.basename(im)
-                im_hash = create_file_hash_sha256(im)
-                imgs_data.append((basename, im_hash, chap_cls.id, name))
-
-        tracker.add_chapters_info(chaps_data)
-        tracker.add_images_info(imgs_data)
-        tracker.toggle_complete(name, True)
+        self.write_tracker(name, success_images)
 
         pbm.logger.info("Waiting for chapter read marker to finish")
         self.cleanup()

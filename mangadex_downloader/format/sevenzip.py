@@ -56,10 +56,10 @@ class SevenZipFile:
         pbm.set_convert_total(len(images))
         progress_bar = pbm.get_convert_pb(recreate=not pbm.stacked)
 
-        for im_path in images:
-            with py7zr.SevenZipFile(
-                path, "a" if os.path.exists(path) else "w"
-            ) as zip_obj:
+        # Existing file is incomplete (complete files are skipped before this),
+        # re-create it to prevent duplicate entries
+        with py7zr.SevenZipFile(path, "w") as zip_obj:
+            for im_path in images:
                 zip_obj.write(im_path, im_path.name)
                 progress_bar.update(1)
 
