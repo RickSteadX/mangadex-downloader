@@ -54,8 +54,20 @@ log = logging.getLogger(__name__)
 
 
 # Inspired from https://github.com/manga-download/hakuneko/blob/master/src/web/mjs/engine/EbookGenerator.mjs
-# TODO: Add doc for this class
 class EpubPlugin:
+    """Minimal EPUB 2 builder for manga images
+
+    Usage:
+
+    1. Create the plugin with manga, language and optional ``file_id``
+       (appended to the book title, ex: "Vol. 1")
+    2. Call :meth:`create_page()` for each chapter with its images.
+       Each image becomes one XHTML page, and every chapter gets
+       a table of contents entry with nested entries for each page
+    3. Call :meth:`write()` to write the EPUB file
+       (mimetype, container.xml, toc.ncx, content.opf, XHTML pages and images)
+    """
+
     def __init__(self, manga, lang, file_id = ""):
         self.manga = manga
         self.id = manga.id
@@ -296,7 +308,7 @@ class EpubPlugin:
 
             # Create nested "navPoint" in parent "navPoint" element
             # For images navigation
-            xhtml_path = f"xhtml/{self._chapter_pos}_{page}"
+            xhtml_path = f"xhtml/{self._chapter_pos}_{page}.xhtml"
             self._create_nav_point(
                 _id=f"TOC_{self._chapter_pos}_{page}",
                 text=f"Page {page}",
@@ -347,14 +359,19 @@ class EpubPlugin:
         pbm.set_convert_total(total_images)
         progress_bar = pbm.get_convert_pb(recreate=not pbm.stacked)
 
+        # Existing file is incomplete (complete files are skipped before this),
+        # re-create it to prevent duplicate entries
         with zipfile.ZipFile(
             path,
-            "a" if os.path.exists(path) else "w",
+            "w",
             compression=env.zip_compression_type,
             compresslevel=env.zip_compression_level,
         ) as zip_obj:
             # Write MIMETYPE
-            zip_obj.writestr("mimetype", "application/epub+zip")
+            # It must be the first file and uncompressed (EPUB specification)
+            zip_obj.writestr(
+                "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
+            )
 
             # Write container
             zip_obj.writestr("META-INF/container.xml", self._container.prettify())
@@ -443,7 +460,8 @@ class EpubVolume(ConvertedVolumesFormat, EPUBFile):
         self.worker.submit(job)
 
     def on_received_images(self, file_path, chapter, images):
-        if self.config.use_volume_cover:
+        # Volume cover is placed only in the first chapter
+        if self.config.use_volume_cover and not self.epub_chapters:
             images.insert(0, self.epub_vol_cover)
 
         self.epub_chapters.append((chapter, images))

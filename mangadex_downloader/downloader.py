@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 import os
+import shutil
 import time
 import logging
 import re
@@ -140,6 +141,8 @@ class FileDownloader:
             # Because previous download are cancelled or error and .temp file are exists
             # and fully downloaded
             if resp is not None and resp.status_code == 416:
+                resp.close()
+
                 # Mark it as finished
                 self.on_finish()
                 self._write_final_file()
@@ -152,13 +155,17 @@ class FileDownloader:
                 and not resp.status_code < 400
             ):
                 self.on_error(error, resp)
+                if resp is not None:
+                    resp.close()
                 return False
 
             # Response are arrived !
             self.on_receive_response(resp)
 
             # Grab the file sizes
-            file_sizes = float(resp.headers.get("Content-Length"))
+            # `Content-Length` may not exist (ex: chunked transfer encoding)
+            content_length = resp.headers.get("Content-Length")
+            file_sizes = float(content_length) if content_length else None
 
             # Try to check if the server support `Range` header
             content_range = resp.headers.get("content-range", "")
@@ -183,7 +190,7 @@ class FileDownloader:
 
             # If "Range" header request is present
             # Content-Length header response is not same as full size
-            if initial_file_sizes:
+            if initial_file_sizes and file_sizes is not None:
                 file_sizes += initial_file_sizes
 
             # Check if file is exist or not
@@ -193,14 +200,16 @@ class FileDownloader:
                     pbm.logger.info(
                         "File exist and replace is False, cancelling download..."
                     )
+                    resp.close()
                     self.on_finish()
                     return True
 
             # Build the progress bar
-            self._build_progres_bar(initial_file_sizes, float(file_sizes))
+            self._build_progres_bar(initial_file_sizes, file_sizes)
 
             # Begin downloading
-            current_size = 0
+            # Resumed download already has `initial_file_sizes` bytes on disk
+            current_size = initial_file_sizes or 0
             with open(self.file, "ab" if initial_file_sizes else "wb") as writer:
                 while True:
                     chunk = resp.raw.read(self.chunk_size)
@@ -214,7 +223,7 @@ class FileDownloader:
 
             # See #14
             # Download is not finished but marked as "finished"
-            if current_size < file_sizes:
+            if file_sizes is not None and current_size < file_sizes:
                 self.cleanup()
                 pbm.logger.warning(
                     "File download is incomplete, "
@@ -240,16 +249,8 @@ class FileDownloader:
         if os.path.exists(self.real_file):
             delete_file(self.real_file)
 
-        w_fp = open(self.real_file, "wb")
-        r_fp = open(self.file, "rb")
-        while True:
-            data = r_fp.read(self.chunk_size)
-            if not data:
-                break
-            w_fp.write(data)
-
-        w_fp.close()
-        r_fp.close()
+        with open(self.real_file, "wb") as w_fp, open(self.file, "rb") as r_fp:
+            shutil.copyfileobj(r_fp, w_fp, self.chunk_size)
 
         delete_file(self.file)
 

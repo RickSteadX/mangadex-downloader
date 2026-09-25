@@ -328,7 +328,7 @@ def build_url(parser, args):
                 continue
 
     # Finally, make :class:`URL` object
-    args.URL = yeet()
+    args.URL = list(yeet())
 
     # Make sure to check if args.URL is empty
     # if empty exit the program

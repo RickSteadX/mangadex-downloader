@@ -143,7 +143,7 @@ def get_args(argv):
         metavar="DIRECTORY",
         help="Store manga / chapter to specified directory. "
         "this option support placeholders, "
-        "read https://mangadex-dl.mansuf.link/en/stable/cli_ref/path_placeholders.html for more info",
+        "read https://github.com/RickSteadX/mangadex-downloader/blob/main/docs/cli_ref/path_placeholders.md for more info",
         default=config.path,
     )
     path_group.add_argument(
@@ -151,7 +151,7 @@ def get_args(argv):
         "-fs",
         help=(
             "Set filename for single format, "
-            "read https://mangadex-dl.mansuf.link/en/stable/cli_ref/path_placeholders.html for more info"
+            "read https://github.com/RickSteadX/mangadex-downloader/blob/main/docs/cli_ref/path_placeholders.md for more info"
         ),
         default=config.filename_single,
     )
@@ -160,7 +160,7 @@ def get_args(argv):
         "-fv",
         help=(
             "Set filename for volume format, "
-            "read https://mangadex-dl.mansuf.link/en/stable/cli_ref/path_placeholders.html for more info"
+            "read https://github.com/RickSteadX/mangadex-downloader/blob/main/docs/cli_ref/path_placeholders.md for more info"
         ),
         default=config.filename_volume,
     )
@@ -169,7 +169,7 @@ def get_args(argv):
         "-fc",
         help=(
             "Set filename for chapter format, "
-            "read https://mangadex-dl.mansuf.link/en/stable/cli_ref/path_placeholders.html for more info"
+            "read https://github.com/RickSteadX/mangadex-downloader/blob/main/docs/cli_ref/path_placeholders.md for more info"
         ),
         default=config.filename_chapter,
     )
@@ -345,7 +345,7 @@ def get_args(argv):
         "-ucc",
         action="store_true",
         help="Enable creation of chapter info (cover) for any single or volume formats. "
-        "See https://mangadex-dl.mansuf.link/en/stable/cli_ref/chapter_info.html for more info. "  # noqa: E501
+        "See https://github.com/RickSteadX/mangadex-downloader/blob/main/docs/cli_ref/chapter_info.md for more info. "  # noqa: E501
         "NOTE: chapter info creation are not enabled "
         "if you are using any chapter format (cbz, pdf, raw, etc)",
         default=config.use_chapter_cover,
@@ -629,7 +629,18 @@ def get_args(argv):
     #  Finalization Process  #
     ##########################
 
-    urls: str = sys.stdin.read() if args.pipe else args.URL
+    if args.pipe:
+        if args.URL:
+            parser.error("URL argument cannot be used together with -pipe option")
+        elif sys.stdin is None or sys.stdin.isatty():
+            parser.error("-pipe option is used, but there is no pipe input")
+
+        urls: str = sys.stdin.read().strip()
+
+        if not urls:
+            parser.error("-pipe option is used, but the pipe input is empty")
+    else:
+        urls: str = args.URL
 
     try:
         validate_forum_thread_url(urls)
@@ -655,8 +666,6 @@ def get_args(argv):
         cover_art_512px = urls.startswith("cover-512px")
         cover_art_256px = urls.startswith("cover-256px")
         cover_art = not any([cover_art_256px, cover_art_512px])
-
-    # TODO: Add extra checking for -pipe and --search options
 
     setattr(args, "URL", urls)
     setattr(args, "fetch_library_manga", fetch_library_manga)

@@ -281,6 +281,30 @@ class DownloadTrackerJSON:
         file_info.completed = is_complete
         self._write(self.data)
 
+    def _check_file_structure(self, file):
+        """Check types of each field in a file entry
+
+        Raise ``ValueError`` if one of the fields has invalid type
+        """
+        if not isinstance(file, dict):
+            raise ValueError(f"file entry must be an object, not {type(file).__name__}")
+
+        def check(key, types):
+            if not isinstance(file.get(key), types):
+                raise ValueError(f"'{key}' has invalid type {type(file.get(key)).__name__}")
+
+        check("name", str)
+        check("id", (str, type(None)))
+        check("hash", (str, type(None)))
+        check("completed", bool)
+        check("images", (list, type(None)))
+        check("chapters", (list, type(None)))
+
+        for key in ("images", "chapters"):
+            for item in file.get(key) or []:
+                if not isinstance(item, dict):
+                    raise ValueError(f"'{key}' must only contain objects")
+
     def _check_data(self, data):
         """Check DownloadTracker data
 
@@ -289,22 +313,25 @@ class DownloadTrackerJSON:
         # Check for `files` key
         try:
             files = data["files"]
-        except KeyError:
+        except (KeyError, TypeError):
             # Malformed data
             return False
 
-        # TODO: Add extra checking for each files
+        if not isinstance(files, list):
+            return False
+
         new_files = []
         for index, file in enumerate(files):
             try:
+                self._check_file_structure(file)
                 fi = FileInfo(**file)
-            except KeyError as e:
+            except (KeyError, TypeError, ValueError) as e:
                 log.error(
-                    f"Malformed tracker file structure in '{self.path}' at index {index}. "
-                    f"Exception raised: {e}"
+                    f"Malformed tracker file structure in '{self.file}' at index {index}. "
+                    f"Exception raised: {e}. "
                     "Re-creating new DownloadTracker file...."
                 )
-                delete_file(self.path)
+                delete_file(self.file)
                 return self._write_new()
 
             # Check duplicate
@@ -338,10 +365,14 @@ class DownloadTrackerJSON:
         try:
             data = json_lib.loads(self.func_read())
         except json.JSONDecodeError:
-            self._write_new()
+            self.data = self._write_new()
             return
 
         data = self._check_data(data)
+        if data is False:
+            # Malformed data, re-create the tracker
+            self.data = self._write_new()
+            return
 
         self._write(data)
         self.data = data

@@ -76,7 +76,7 @@ def get_volume_cover(manga, volume, path, replace, download=True):
 
     cover_art_iter_kwargs = [
         # Fix default volume covers behaviour
-        # See https://github.com/mansuf/mangadex-downloader/issues/105
+        # See upstream issue mansuf/mangadex-downloader#105
         {"language_override": None},  # --volume-cover-language or --language
         {
             "language_override": manga.original_language.value,
@@ -101,16 +101,19 @@ def get_volume_cover(manga, volume, path, replace, download=True):
         else:
             break
 
-    if download and cover is None:
-        pbm.logger.warning(
-            f"Failed to find volume cover for volume {volume}. "
-            "Falling back to manga cover..."
-        )
+    if cover is None:
+        if download:
+            pbm.logger.warning(
+                f"Failed to find volume cover for volume {volume}. "
+                "Falling back to manga cover..."
+            )
         cover = manga.cover
 
     url = get_cover_art_url(manga.id, cover, "original")
 
-    if download:
+    if download and url is None:
+        pbm.logger.warning(f"Manga '{manga.title}' doesn't have any cover")
+    elif download:
         fd = FileDownloader(url, path, replace=replace)
         fd.download()
         fd.cleanup()
@@ -260,6 +263,7 @@ class QueueWorkerReadMarker(threading.Thread):
         self._shutdown = threading.Event()
         self._chapters = []
         self._max_size = 20
+        self._max_retries = 5
 
         self.manga_id = manga_id
 
@@ -307,6 +311,7 @@ class QueueWorkerReadMarker(threading.Thread):
             self.join()
 
     def run(self):
+        failed_attempts = 0
         while True:
             if self._shutdown.is_set() and not self._chapters:
                 # Shutdown signal is received
@@ -320,21 +325,40 @@ class QueueWorkerReadMarker(threading.Thread):
                 time.sleep(0.5)
                 continue
 
-            chapter_ids = self._chapters[: self._max_size - 1]
-            del self._chapters[: self._max_size - 1]
+            chapter_ids = self._chapters[: self._max_size]
+            del self._chapters[: self._max_size]
 
             data = {"chapterIdsRead": chapter_ids}
 
             url = f"{self.base_url}/manga/{self.manga_id}/read"
-            r = self.net.mangadex.post(url, json=data)
+            try:
+                r = self.net.mangadex.post(url, json=data)
+            except Exception as e:
+                log.debug(f"Failed to mark chapters as read, reason: {e}")
+                ok = False
+            else:
+                ok = r.ok
 
-            if not r.ok:
+            if not ok:
+                failed_attempts += 1
+
+                # obviously we don't wanna flood the screen with bunch of chapter ids
+                log.debug(f"Failed chapters to marked as read: {chapter_ids}")
+
+                if failed_attempts >= self._max_retries:
+                    log.error(
+                        "An error occurred when marking chapters as read. "
+                        f"Giving up after {failed_attempts} attempts"
+                    )
+                    failed_attempts = 0
+                    continue
+
                 log.error(
                     "An error occurred when marking chapters as read. "
                     "Re-adding failed chapters to queue"
                 )
-                # obviously we don't wanna flood the screen with bunch of chapter ids
-                log.debug(f"Failed chapters to marked as read: {chapter_ids}")
-
                 self._chapters.extend(chapter_ids)
+                time.sleep(failed_attempts)
                 continue
+
+            failed_attempts = 0

@@ -214,45 +214,39 @@ class BaseCommand:
             self.on_empty_error()
             return
 
-        answer = None
         while True:
-            # TODO: Refactor this
-            if answer is not None:
-                if answer.startswith("preview") and self.preview():
-                    answer_item = answer.split("preview", maxsplit=1)[1].strip()
-                    try:
-                        item = choices[answer_item]
-                    except KeyError:
-                        self._error("Invalid choice, try again")
-                    else:
-                        self.on_preview(item)
-
-                    answer = None
-                    continue
-
-                elif answer.startswith("next"):
-                    action = "next"
-                elif answer.startswith("previous"):
-                    action = "previous"
-                else:
-                    try:
-                        item = choices[answer]
-                    except KeyError:
-                        self._error("Invalid choice, try again")
-                        answer = None
-                    else:
-                        return item
-
-                if answer is not None:
-                    try:
-                        self._insert_choices(choices, action)
-                    except IteratorEmpty:
-                        self._error("There are no more results")
-                    except IndexError:
-                        self._error("Choices are out of range, try again")
-
             self._print_choices()
             answer = input_handle("=> ")
+
+            # Preview the item (if command support it)
+            if answer.startswith("preview") and self.preview():
+                answer_item = answer.split("preview", maxsplit=1)[1].strip()
+                try:
+                    item = choices[answer_item]
+                except KeyError:
+                    self._error("Invalid choice, try again")
+                else:
+                    self.on_preview(item)
+
+                continue
+
+            # Go to next or previous page
+            if answer.startswith("next") or answer.startswith("previous"):
+                action = "next" if answer.startswith("next") else "previous"
+                try:
+                    self._insert_choices(choices, action)
+                except IteratorEmpty:
+                    self._error("There are no more results")
+                except IndexError:
+                    self._error("Choices are out of range, try again")
+
+                continue
+
+            # Select the item
+            try:
+                return choices[answer]
+            except KeyError:
+                self._error("Invalid choice, try again")
 
 
 class MangaDexCommand(BaseCommand):

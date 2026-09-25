@@ -214,7 +214,7 @@ class Filter:
         if value and value.upper() not in value_and_or:
             raise FilterError(key, f"value must be 'OR' or 'AND', not '{value}'")
 
-        return value
+        return value.upper() if value else value
 
     def _validate_values_from_list(self, key, values, array):
         if values is None:
@@ -223,11 +223,14 @@ class Filter:
         if isinstance(values, str):
             values = [values]
 
+        new_values = []
         for value in values:
             if value.lower() not in array:
                 raise FilterError(key, f"Value must be one of {array}, not {value}")
 
-        return values
+            new_values.append(value.lower())
+
+        return new_values
 
     def _validate_language(self, key, values):
         new_values = []
@@ -290,8 +293,8 @@ class Filter:
                 r"latestUploadedChapter|"
                 r"followedCount|"
                 r"relevance|"
-                r"rating|"
-                r")\]"
+                r"rating"
+                r")\]$"
             )
             match = re.match(re_order_key, key)
             if match is None:

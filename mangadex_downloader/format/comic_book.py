@@ -22,7 +22,6 @@
 
 import logging
 import zipfile
-import os
 import xml.etree.ElementTree as ET
 
 from .base import ConvertedChaptersFormat, ConvertedVolumesFormat, ConvertedSingleFormat
@@ -143,9 +142,11 @@ class CBZFile:
     def make_zip(self, path):
         from ..config import env
 
+        # Existing file is incomplete (complete files are skipped before this),
+        # re-create it to prevent duplicate entries
         return zipfile.ZipFile(
             path,
-            "a" if os.path.exists(path) else "w",
+            "w",
             compression=env.zip_compression_type,
             compresslevel=env.zip_compression_level,
         )

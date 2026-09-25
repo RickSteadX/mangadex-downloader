@@ -83,7 +83,7 @@ repo = get_value_var("repository")
 
 # Finally run main setup
 setup(
-    name="mangadex-downloader",
+    name="mangadex-downloader-rsx",
     packages=packages,
     version=get_version(),
     license=get_value_var("license"),
@@ -91,9 +91,7 @@ setup(
     long_description=README,
     long_description_content_type="text/markdown",
     author=get_value_var("author"),
-    author_email=get_value_var("author_email"),
     url=f"https://github.com/{repo}",
-    download_url=f"https://github.com/{repo}/releases",
     keywords=["mangadex"],
     install_requires=requires_main,
     extras_require=extras_require,

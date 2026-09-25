@@ -25,6 +25,7 @@ import io
 import os
 import time
 import math
+import zlib
 
 from .base import ConvertedChaptersFormat, ConvertedVolumesFormat, ConvertedSingleFormat
 from .utils import get_chapter_info, get_volume_cover
@@ -59,9 +60,8 @@ class _PageRef:
 
 # Utility function for Pillow library
 def _write_image(im, filename, existing_pdf, image_refs):
-    # FIXME: Should replace ASCIIHexDecode with RunLengthDecode
-    # (packbits) or LZWDecode (tiff/lzw compression).  Note that
-    # PDF 1.2 also supports Flatedecode (zip compression).
+    # NOTE: Unlike Pillow, palette ("P" mode) images are compressed
+    # with FlateDecode (zip compression) instead of ASCIIHexDecode
 
     params = None
     decode = None
@@ -103,7 +103,7 @@ def _write_image(im, filename, existing_pdf, image_refs):
         procset = "ImageB"  # grayscale
         dict_obj["SMaskInData"] = 1
     elif im.mode == "P":
-        filter = "ASCIIHexDecode"
+        filter = "FlateDecode"
         palette = im.getpalette()
         dict_obj["ColorSpace"] = [
             PdfParser.PdfName("Indexed"),
@@ -141,7 +141,10 @@ def _write_image(im, filename, existing_pdf, image_refs):
 
     op = io.BytesIO()
 
-    if filter == "ASCIIHexDecode":
+    if filter == "FlateDecode":
+        # Raw palette indexes (8 bits per component), without predictor
+        op.write(zlib.compress(im.tobytes()))
+    elif filter == "ASCIIHexDecode":
         ImageFile._save(im, op, [("hex", (0, 0) + im.size, 0, im.mode)])
     elif filter == "CCITTFaxDecode":
         im.save(
@@ -283,9 +286,9 @@ class PDFPlugin:
                     pass
             number_of_pages += im_number_of_pages
             for i in range(im_number_of_pages):
+                # All images are converted to RGB mode before written,
+                # so there is no transparency mask (SMask) that need extra object id
                 image_refs.append(existing_pdf.next_object_id(0))
-                if im.mode == "P" and "transparency" in im.info:
-                    image_refs.append(existing_pdf.next_object_id(0))
 
                 page_refs.append(existing_pdf.next_object_id(0))
                 contents_refs.append(existing_pdf.next_object_id(0))
